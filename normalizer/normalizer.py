@@ -1,7 +1,7 @@
 from typing import Dict
 import unicodedata
 import regex as re
-from ..utils.io import read_tsv
+from utils.io import read_tsv
 
 
 class Normalizer:
