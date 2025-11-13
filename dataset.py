@@ -274,9 +274,9 @@ def main():
 
     # ---- YOUR PATHS ----
     # BOUN (UD CoNLL-U)
-    ul.add_boun("../UD_Turkish-BOUN-master/tr_boun-ud-train.conllu")
+    ul.add_boun("UD_Turkish-BOUN_v2.11_unrestricted-main/train-unr.conllu")
     # ITU Web (RAW→GOLD withSentenceBegin)
-    ul.add_iwt("../IWTandTestSmall/IWT_normalizationerrorsNoUpperCase.withSentenceBegin")
+    ul.add_iwt("IWTandTestSmall/IWT_normalizationerrorsNoUpperCase.withSentenceBegin")
 
     # Split by domain using single pass
     boun_buf = []

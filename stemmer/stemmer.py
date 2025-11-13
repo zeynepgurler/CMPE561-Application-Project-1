@@ -1,5 +1,7 @@
 from typing import List
-from ..utils.io import read_tsv
+from utils.io import read_tsv
+import re
+#    stemmed_sents = [[self.stemmer.stem(tok) for tok in sent] for sent in sents]
 
 
 class SimpleTurkishStemmer:
@@ -8,17 +10,71 @@ class SimpleTurkishStemmer:
     """
     def __init__(self, suffix_path: str):
         rows = read_tsv(suffix_path)
-        self.suffixes = sorted([r[1] for r in rows if len(r) >= 2], key=len, reverse=True)
+        self.suffixes = sorted([row[0] for row in rows], key=len, reverse=True)
 
+
+    def final_devoicer(self, stem: str):
+        stem_ends = {"b": "p", "c": "ç", "d": "t", "g": "k", "ğ": "k"}
+        for end in stem_ends:
+            if stem.endswith(end):
+                devoiced = stem[:-1] + stem_ends[end] 
+                return devoiced
+        return stem
+      
 
     def stem(self, token: str) -> str:
-        t = token
-        for suf in self.suffixes:
-            if t.endswith(suf) and len(t) - len(suf) >= 2:
-                t = t[: -len(suf)]
-                break
-        return t
+        if "'" in token:
+            t = token.split("'")[0]
+            return t
+        else:
+            t = token
+            for suf in self.suffixes:
+                if len(t) <= 3:   # most words with this length dont need stemming
+                    continue
+                if t.endswith(suf) and len(t) - len(suf) >= 2:
+                    t = t[: -len(suf)]
+                    break
+            t = self.final_devoicer(t)
+            return t.replace("I", "ı").replace("İ", "i").lower()
 
 
     def stem_sentence(self, tokens: List[str]) -> List[str]:
         return [self.stem(t) for t in tokens]
+    
+
+stemmer = SimpleTurkishStemmer("suffixes.tsv")
+gold = read_tsv("gold_stemmer.tsv")
+
+true = 0
+false = 0
+for pair in gold[1:]:
+    stemmed = stemmer.stem(pair[0])
+    if stemmed == pair[1]:
+        true += 1
+    else:
+        #print(f"Form: {pair[0]}\tLemma: {pair[1]}\tStem: {stemmed}")
+        false += 1
+print(false)
+
+acc = (true / (true + false))
+print(acc)
+
+x = ['suya', "gidiyor", "diyor", "ediyor", "yiyor", "kitaba", "sebebe", "kazan", "kazana", "ye", "sev", "kadın", "pazar",
+     "kapak", "köy", "sepet", "trafik", "trafiğe", "kitab", "sebeb", "ağ", "eleğ", "tac", "seped", "kepeng", "kapağa", "kitabımı",
+     "kepengimin", "trafiğimizin"]
+
+
+stm = stemmer.stem_sentence(x)
+
+cap = ["ankara'nın", "istanbul'un", "trabzon'a", "konya'yı", "Fransızların"]
+
+#print(x)
+#print(stm)
+
+
+# add final devoicing and irregular stems, this would ensure +80% acc
+# b-p, c-ç, d-t, g,ğ-k
+#neden, diyor --> stem di, yiyor --> stem yi ,önce, bana, sana, istiyorum, burnu, karnı, şehrin, şehri, doğ,
+
+
+
