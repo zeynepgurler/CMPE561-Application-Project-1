@@ -16,6 +16,7 @@ from typing import List, Dict, Iterable, Optional, Tuple
 from dataclasses import dataclass
 from itertools import islice
 import regex as re
+import csv
 
 
 # ----------------------------
@@ -89,13 +90,21 @@ class UnifiedBounItuTreebankLoader:
         """Register an ITU Web file in '...withSentenceBegin' format."""
         self.sources.append(("iwt", with_sentence_begin_path))
 
+    def add_tweets_cqp(self, cqp_export_path: str) -> None:
+        """Register a TweetS CQPweb export (tab-separated .txt/.tsv with headers)."""
+        self.sources.append(("tweets", cqp_export_path))
+
     def iterate(self) -> Iterable[Example]:
         """Yield unified Example items from all registered sources."""
         for stype, path in self.sources:
             if stype == "boun":
                 yield from self.read_boun_conllu(path)
-            else:
+            elif stype == "iwt":
                 yield from self.read_iwt_with_sentence_begin(path)
+            elif stype == "tweets":
+                yield from self.read_tweets_cqp_export(path)
+            else:
+                raise ValueError(f"Unknown source type: {stype}")
 
     # --------- BOUN (UD CoNLL-U) ----------
     def read_boun_conllu(self, path: str) -> Iterable[Example]:
@@ -222,6 +231,61 @@ class UnifiedBounItuTreebankLoader:
                     sent_id=None,
                 )
 
+    # --------- TweetS (CQPweb export .txt/.tsv) ----------
+    def read_tweets_cqp_export(self, path: str) -> Iterable[Example]:
+        """
+        Expects a CQPweb 'Save/Download' export with headers (tab-separated).
+        Uses columns:
+          - Context before, Query item, Context after
+          - Correct (optional)
+          - Text ID (optional)
+          - Tagged query item (optional; sadece kontrol için)
+        If 'Correct' is empty/missing, gold_text == raw_text.
+        """
+        # CQP export bazen "Number of hit" gibi boşluklu başlıklar içerir.
+        # Hepsini lowercase'a çevirip boşlukları '_' yapalım.
+        def norm_col(c: str) -> str:
+            return c.strip().lower().replace(" ", "_")
+
+        with open(path, "r", encoding="utf-8", newline="") as f:
+            # dialect belirgin olsun
+            reader = csv.DictReader(f, delimiter="\t")
+            reader.fieldnames = [norm_col(c) for c in (reader.fieldnames or [])]
+
+            # gerekli kolon adları
+            # (bazı temalarda 'matchbegin_corpus_position' gibi ekstra alanlar da olabilir, görmezden geliyoruz)
+            for row in reader:
+                row = {norm_col(k): (v or "") for k, v in row.items()}
+
+                ctx_bef = row.get("context_before", "")
+                query   = row.get("query_item", "")
+                ctx_aft = row.get("context_after", "")
+                correct = row.get("correct", "")  # yoksa "" döner
+                text_id = row.get("text_id", None)
+
+                if not query:
+                    # Güvenlik: bozuk satır
+                    continue
+
+                # ham metni birleştir
+                raw_text = " ".join([s for s in (ctx_bef.strip(), query.strip(), ctx_aft.strip()) if s])
+
+                # gold: Correct doluysa Query yerine Correct koy
+                if correct and correct.strip() and (correct.strip() != query.strip()):
+                    gold_text = " ".join([s for s in (ctx_bef.strip(), correct.strip(), ctx_aft.strip()) if s])
+                else:
+                    gold_text = raw_text
+
+                # tokenlar: en basit yaklaşım; isterseniz tweet tokenizer ile değiştirebilirsiniz
+                gold_tokens = gold_text.split()
+
+                yield Example(
+                    raw_text=raw_text,
+                    gold_text=gold_text,
+                    gold_tokens=gold_tokens,
+                    domain="tweets",
+                    sent_id=text_id,
+                )
 
 # ----------------------------
 # Minimal evaluator (optional)
@@ -272,27 +336,30 @@ def show_examples(ex_iter, n=3, title=""):
 def main():
     ul = UnifiedBounItuTreebankLoader(boun_detok=True)
 
-    # ---- YOUR PATHS ----
     # BOUN (UD CoNLL-U)
-    ul.add_boun("UD_Turkish-BOUN_v2.11_unrestricted-main/train-unr.conllu")
-    # ITU Web (RAW→GOLD withSentenceBegin)
-    ul.add_iwt("IWTandTestSmall/IWT_normalizationerrorsNoUpperCase.withSentenceBegin")
+    ul.add_boun("../datasets/UD_Turkish-BOUN_v2.11_unrestricted-main/train-unr.conllu")
 
-    # Split by domain using single pass
-    boun_buf = []
-    iwt_buf = []
+    # ITU Web (RAW→GOLD withSentenceBegin)
+    ul.add_iwt("../datasets/IWTandTestSmall/IWT_normalizationerrorsNoUpperCase.withSentenceBegin")
+
+    # TweetS (CQP export; tab-separated .txt/.tsv)
+    ul.add_tweets_cqp("../datasets/tweetS.txt")   # senin indirdiğin dosya
+
+    # Birkaç örnek görelim
+    boun = []
+    iwt  = []
+    tw   = []
 
     for ex in ul.iterate():
-        if ex.domain == "boun" and len(boun_buf) < 3:
-            boun_buf.append(ex)
-        elif ex.domain == "iwt" and len(iwt_buf) < 3:
-            iwt_buf.append(ex)
-        if len(boun_buf) >= 3 and len(iwt_buf) >= 3:
+        if ex.domain == "boun" and len(boun) < 2: boun.append(ex)
+        if ex.domain == "iwt"  and len(iwt)  < 2: iwt.append(ex)
+        if ex.domain == "tweets" and len(tw) < 2: tw.append(ex)
+        if len(boun) >= 2 and len(iwt) >= 2 and len(tw) >= 2:
             break
 
-    show_examples(iter(boun_buf), 3, title="BOUN examples")
-    show_examples(iter(iwt_buf), 3, title="ITU examples")
+    show_examples(iter(boun), 2, title="BOUN examples")
+    show_examples(iter(iwt),  2, title="ITU examples")
+    show_examples(iter(tw),   2, title="TweetS examples")  # raw vs gold farkını gör
 
 if __name__ == "__main__":
     main()
-
