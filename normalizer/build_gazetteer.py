@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Build Turkish proper-noun gazetteers from multiple sources:
 - Wikipedia titles dump (all titles in ns0)

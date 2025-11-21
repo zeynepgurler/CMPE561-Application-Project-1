@@ -42,7 +42,6 @@ from src.normalizer.advanced_normalizer import UniversalAdvancedNormalizer
 
 from zemberek.start_zemberek import ZemberekAnalyzer
 
-
 # ==============================
 # Tokenization and masking (eval)
 # ==============================
@@ -64,7 +63,7 @@ def mask_eval(s: str) -> str:
 
 
 # ==============================
-# Pretty inline DIFF
+# Pretty inline diff
 # ==============================
 
 def inline_diff(pred: str, gold: str) -> str:
@@ -90,7 +89,7 @@ def print_case(raw: str, pred: str, gold: str) -> None:
 
 
 # ==============================
-# Edit-level PRF counters
+# Edit-level counters
 # ==============================
 
 def edit_counts(raw_t: List[str], pred_t: List[str], gold_t: List[str]) -> Tuple[int, int, int]:
@@ -148,46 +147,35 @@ def tr_lower(s: str) -> str:
     # senin aynı yardımcı fonksiyonunla tutarlı olsun
     return s.translate(str.maketrans("İIÜŞÖÇĞ", "iıüşöçg")).lower()
 
-def load_gazetteer_by_label(path: str) -> Dict[str, Set[str]]:
+def load_gazetteer_txt(path: str) -> Set[str]:
     """
-    TSV: name<TAB>LABEL  (name lowercase ise bile normalize ediyoruz)
-    Dönen: {"PERS": set(...), "LOC": set(...), ...}
+    Load a one-column gazetteer file.
+    Each line contains a single proper name.
+    Returns a set of lowercase names.
     """
-    buckets: Dict[str, Set[str]] = {}
+    gaz = set()
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
-            line = line.strip()
-            if not line or "\t" not in line:
-                continue
-            name, label = line.split("\t", 1)
-            name = tr_lower(_nfc(name.strip()))
-            label = label.strip().upper()
-            if not name or not label:
-                continue
-            buckets.setdefault(label, set()).add(name)
-    return buckets
-
+            name = line.strip()
+            if name:
+                gaz.add(tr_lower(_nfc(name)))
+    return gaz
 
 # ==============================
 # Morphological analyzer
 # ==============================
 
-class NoOpAnalyzer:
-    def analyze(self, token: str):
-        # Her token'ı "geçerli" say (general-domain güvenli)
-        return [("DUMMY",)]
-    
-morph = ZemberekAnalyzer(jar_path="../zemberek/zemberek-full.jar")
+morph = ZemberekAnalyzer() #jar_path="zemberek/zemberek-full.jar")
 
 # ==============================
-# Core evaluation
+# Evaluation
 # ==============================
 
 def evaluate_dataset(norm, examples: Iterable["Example"], mask: bool = True, max_err: int = 5, strip: bool = False) -> Dict[str, float]:
     """
     Evaluate a normalizer over examples.
     Returns dict with sent_exact, token_acc, edit_prec, edit_rec, edit_f1.
-    Prints up to max_err mismatches with inline DIFF.
+    Prints up to max_err mismatches with inline differences.
     """
     sent_ok = sent_tot = 0
     tok_ok = tok_tot = 0
@@ -264,8 +252,8 @@ def main():
     # Load data
     ul = UnifiedBounItuTreebankLoader(boun_detok=True)
 
-    ul.add_boun("../datasets/UD_Turkish-BOUN_v2.11_unrestricted-main/test-unr.conllu")
-    ul.add_iwt("../datasets/IWTandTestSmall/SmallTest.withSentenceBegin")
+    ul.add_boun("data/UD_Turkish-BOUN_v2.11_unrestricted-main/test-unr.conllu")
+    ul.add_iwt("data/IWTandTestSmall/SmallTest.withSentenceBegin")
 
     data = list(ul.iterate())
     boun = [ex for ex in data if ex.domain == "boun"]
@@ -274,66 +262,28 @@ def main():
     with open("normalization_resources/safe_vocab.txt", "r", encoding="utf-8") as f:
         safe_vocab = {line.strip() for line in f if line.strip()}
 
-    with open("normalization_resources/boun_freq.json", "r", encoding="utf-8") as f:
+    with open("normalization_resources/wiki_freq.json", "r", encoding="utf-8") as f:
         boun_freq = json.load(f)
 
-    # Build normalizer
-    norm = UniversalSimpleNormalizer(
-        lexicon_path="normalization_resources/lexicon.tsv",
-        use_masking=True,
-        use_diacritics=True,
-        use_edit_distance=True,
-        safe_vocab=safe_vocab,
-        boun_freq=boun_freq,
-        freq_ok=5,            
-        allow_on_noisy=True
-    )
+    gaz = load_gazetteer_txt("normalization_resources/tr_gazetteer_large.txt")
 
-    gaz = load_gazetteer_by_label("normalization_resources/proper_gazetteer_tr.tsv")
-
-    # proper_noun_gazetteers parametresi "list[set]" bekliyor.
-    # Birden fazla bağımsız set verirsen, sınıf “kaç sette var/kaç sette yok” oranıyla “özel ad” sinyali üretir.
-    proper_sets = [
-        gaz.get("PERS", set()),
-        gaz.get("LOC", set()),
-        gaz.get("ORG", set()),
-        gaz.get("PRODUCT", set()),
-        gaz.get("WORK", set()),
-        gaz.get("EVENT", set()),
-        gaz.get("MISC", set()),
-    ]
-
-    # ---------------- Normalizer: SIMPLE (baseline) ----------------
-    simple = UniversalSimpleNormalizer(
-        lexicon_path="normalization_resources/lexicon.tsv",
-        use_masking=True,
-        use_diacritics=True,
-        use_edit_distance=True,
-        safe_vocab=safe_vocab,
-        boun_freq=boun_freq,
-        freq_ok=5,
-        allow_on_noisy=True
-    )
-
-    # ---------------- Normalizer: ADVANCED (general-domain) ----------------
-    # Hook’ları vermesen de general-domain güvenli: NoOpAnalyzer sadece LV için “pass” verir.
-    analyzer = NoOpAnalyzer()
+    # gazetteer is big so do not load it if you want fast results
 
     advanced = UniversalAdvancedNormalizer(
         lexicon_path="normalization_resources/lexicon.tsv",
         safe_vocab=safe_vocab,
         boun_freq=boun_freq,
-        freq_ok=25,
-        allow_on_noisy=True,
-        # Advanced toggles
-        morph_analyzer=morph,     # şimdilik analizör yoksa
-        lv_mode="soft",          # ileride analizör ekleyince yumuşak gate
-        use_slang=True,         # genel domain için kapalı
-        use_accent_norm=True,   # konservatif
-        use_vowel_restoration=False,  # konservatif
+        freq_ok=25, # look up freq of word in safe vocab to decide, works really well
+        allow_on_noisy=True, 
+        proper_noun_gazetteers=gaz, # gazetteer
+        morph_analyzer=morph,      # zemberek
+        lv_mode="soft",        # mode for zemberek  
+        use_slang=True,         
+        use_accent_norm=True,   # gidiyom to gidiyorum
+        use_vowel_restoration=False,  # capitaliza first word in sent
     )
 
-    # 3) Evaluate per split (mask specials during eval)
+    # Evaluate per split (mask specials during eval)
     evaluate_split(advanced, boun, title="BOUN (clean)", mask=True, max_err=5)
     evaluate_split(advanced, iwt,  title="IWT (noisy)",     mask=True, max_err=5, strip=True)
     evaluate_split(advanced, data, title="OVERALL",         mask=True, max_err=5) 

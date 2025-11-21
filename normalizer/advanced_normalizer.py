@@ -55,7 +55,7 @@ class UniversalAdvancedNormalizer(UniversalSimpleNormalizer):
         disambiguator=None,           # expects .disambiguate(tokens, analyses) -> best
         diacritizer=None,             # expects .diacritize(token) -> str
         vowel_restorer=None,          # expects .restore(token) -> str
-        proper_noun_gazetteers: Optional[List[set]] = None,
+        proper_noun_gazetteers: Optional[set] = None,
         proper_ratio_thresh: float = 1.5,
         use_accent_norm: bool = True,
         use_vowel_restoration: bool = True,
@@ -72,7 +72,7 @@ class UniversalAdvancedNormalizer(UniversalSimpleNormalizer):
         self.diacritizer = diacritizer
         self.vowel_restorer = vowel_restorer
 
-        # Resources / toggles
+        # Resources/toggles
         self.proper_sets = proper_noun_gazetteers or []
         self.proper_ratio_thresh = proper_ratio_thresh
         self.use_accent_norm = use_accent_norm
@@ -91,18 +91,42 @@ class UniversalAdvancedNormalizer(UniversalSimpleNormalizer):
         }
         self.re_around_symbol = re.compile(r"(?<=\p{L})[@$](?=\p{L})", re.IGNORECASE)
 
-        # Accent-ish endings (very conservative)
-        # gidicem -> gideceğim, gelicem -> geleceğim, bilmiycem -> bilmeyeceğim
-        self.accent_rules: List[Tuple[re.Pattern, str]] = [
-            (re.compile(r"(?i)(\p{L}+?)cem$"), r"\1ceğim"),
-            (re.compile(r"(?i)(\p{L}+?)cam$"), r"\1cağım"),
-            (re.compile(r"(?i)(\p{L}+?)cem$"), r"\1ceğim"),
-            (re.compile(r"(?i)(\p{L}+?)cem$", re.UNICODE), r"\1ceğim"),
-            (re.compile(r"(?i)(\p{L}+?)ycem$"), r"\1meyeceğim"),
-            (re.compile(r"(?i)(\p{L}+?)ycam$"), r"\1mayacağım"),
-            (re.compile(r"(?i)(\p{L}+?)ycan$"), r"\1mayacağın"),
-            (re.compile(r"(?i)(\p{L}+?)yiz$"), r"\1yiz"),  # keep; placeholder to show pattern
+        self.accent_rules = [
+            # Şimdiki zaman
+            (re.compile(r"(?i)\b(\p{L}{3,}?[ıiuü])yom\b"), r"\1yorum"),
+            (re.compile(r"(?i)\b(\p{L}{3,}?[ıiuü])yon\b"), r"\1yorsun"),
+            (re.compile(r"(?i)\b(\p{L}{3,}?[ıiuü])yosun\b"), r"\1yorsun"),
+            (re.compile(r"(?i)\b(\p{L}{3,}?[ıiuü])yo\b"), r"\1yor"),
+            (re.compile(r"(?i)\b(\p{L}{3,}?[ıiuü])yoz\b"), r"\1yoruz"),
+            (re.compile(r"(?i)\b(\p{L}{3,}?[ıiuü])yosunuz\b"), r"\1yorsunuz"),
+            (re.compile(r"(?i)\b(\p{L}{3,}?[ıiuü])yolar\b"), r"\1yorlar"),
+            (re.compile(r"(?i)\b(\p{L}{2,}?)yolar\b"), r"\1yorlar"),
+
+            # Gelecek zaman (olumlu)
+            (re.compile(r"(?i)\b(\p{L}{3,}?)cem\b"), r"\1ceğim"),
+            (re.compile(r"(?i)\b(\p{L}{3,}?)cam\b"), r"\1cağım"),
+            (re.compile(r"(?i)\b(\p{L}{3,}?)cen\b"), r"\1ceksin"),
+            (re.compile(r"(?i)\b(\p{L}{3,}?)can\b"), r"\1caksın"),
+            (re.compile(r"(?i)\b(\p{L}{3,}?)cek\b"), r"\1ecek"),
+            (re.compile(r"(?i)\b(\p{L}{3,}?)cak\b"), r"\1acak"),
+            (re.compile(r"(?i)\b(\p{L}{3,}?)cez\b"), r"\1ceğiz"),
+            (re.compile(r"(?i)\b(\p{L}{3,}?)caz\b"), r"\1cağız"),
+            (re.compile(r"(?i)\b(\p{L}{3,}?)cekler\b"), r"\1ecekler"),
+            (re.compile(r"(?i)\b(\p{L}{3,}?)caklar\b"), r"\1acaklar"),
+
+            # Gelecek zaman (olumsuz)
+            (re.compile(r"(?i)\b(\p{L}{3,}?)miycem\b"), r"\1meyeceğim"),
+            (re.compile(r"(?i)\b(\p{L}{3,}?)micem\b"), r"\1mayacağım"),
+            (re.compile(r"(?i)\b(\p{L}{3,}?)miycen\b"), r"\1meyeceksin"),
+            (re.compile(r"(?i)\b(\p{L}{3,}?)mican\b"), r"\1mayacaksın"),
+            (re.compile(r"(?i)\b(\p{L}{3,}?)miycek\b"), r"\1meyecek"),
+            (re.compile(r"(?i)\b(\p{L}{3,}?)micak\b"), r"\1mayacak"),
+            (re.compile(r"(?i)\b(\p{L}{3,}?)miycez\b"), r"\1meyeceğiz"),
+            (re.compile(r"(?i)\b(\p{L}{3,}?)micaz\b"), r"\1mayacağız"),
+
+            (re.compile(r"(?i)\b(\p{L}+?)yiz\b"), r"\1yiz"),
         ]
+
         # Question particle squashed: gidiyonmu -> gidiyor musun (very limited heuristic)
         self.re_q_particle = re.compile(r"(?i)^(.+?)(mi|mı|mu|mü)(n|sun|sunuz|siniz)?$")
 
@@ -112,22 +136,20 @@ class UniversalAdvancedNormalizer(UniversalSimpleNormalizer):
         # Core splitter for punct-preserving lexicon lookups
         self._re_tok_core = re.compile(r"^(\p{P}+)?([\p{L}\p{N}]+)(\p{P}+)?$", re.UNICODE)
  
-
-    # -------------------- Public API (override) --------------------
     def normalize(self, text: str) -> str:
-        # 1) Unicode normalize + sanitize
-        s = self._normalize_unicode(text)
+        # Unicode normalize + sanitize
+        s = self.normalize_unicode(text)
 
-        # 2) Masking (IDs); then light repetition shrink
+        # Masking (IDs); then light repetition shrink
         if self.use_masking:
             s = self._mask(s)
-        s = self._shrink_repetitions_to(s, 1 if self.use_repeat_shrink_to_one else 2)
+        s = self.shrink_repetitions_to(s, 1 if self.use_repeat_shrink_to_one else 2)
 
-        # 3) Token pipeline (cascaded)
+        # Token pipeline (cascaded)
         raw_tokens = s.split()
         out_tokens: List[str] = []
         for i, tok in enumerate(raw_tokens):
-            norm = self._normalize_token_cascade(tok)
+            norm = self.normalize_token_cascade(tok)
             out_tokens.append(norm)
 
         # 4) Sentence casing like the base class
@@ -145,7 +167,7 @@ class UniversalAdvancedNormalizer(UniversalSimpleNormalizer):
         return s
 
     # -------------------- Cascade --------------------
-    def _normalize_token_cascade(self, tok: str) -> str:
+    def normalize_token_cascade(self, tok: str) -> str:
         # Early outs: punctuation-only or safe-vocab
         if (not tok) or self.re_all_punct.fullmatch(tok):
             return tok
@@ -159,64 +181,64 @@ class UniversalAdvancedNormalizer(UniversalSimpleNormalizer):
             key = tr_lower(core)
             hit = self.lexicon.get(key)
             if hit is not None:
-                if self.boun_freq.get(hit, 0) >= self.freq_ok or self._looks_noisy(core, hit):
+                if self.boun_freq.get(hit, 0) >= self.freq_ok or self.looks_noisy(core, hit):
                     return lead + hit + trail
 
         x = tok
 
         # A) Replacement rules (slang/leet/logogram, *very* conservative)
-        y = self._apply_replacements(x) if self.use_slang else x
-        if y != x and self._lv_ok(y, context="repl"):
+        y = self.apply_replacements(x) if self.use_slang else x
+        if y != x and self.lv_ok(y, context="repl"):
             return y
         x = y
 
         # B) Proper noun detection & apostrophe handling
-        y = self._proper_noun_fix(x)
-        if y != x and self._lv_ok(y, context="proper"):
+        y = self.proper_noun_fix(x)
+        if y != x and self.lv_ok(y, context="proper"):
             return y
         x = y  # continue with possibly improved token
 
         # C) Diacritization (hook -> fallback variants), gate by LV
-        y = self._diacritize_seq(x)
-        if y != x and self._lv_ok(y, context="diacritics"):
+        y = self.diacritize_seq(x)
+        if y != x and self.lv_ok(y, context="diacritics"):
             return y
         x = y
 
         # D) Partial vowel restoration (hook -> heuristic), gate by LV
-        if self.use_vowel_restoration and self._looks_noisy(x, x):
-            y = self._restore_vowels(x)
-            if y != x and self._lv_ok(y, context="vowel"):
+        if self.use_vowel_restoration and self.looks_noisy(x, x):
+            y = self.restore_vowels(x)
+            if y != x and self.lv_ok(y, context="vowel"):
                 return y
             x = y
 
         # E) Accent normalization (speechy → written), validate via generator/analyzer
-        if self.use_accent_norm and self._is_all_lower(x) and self._looks_noisy(x, x):
-            y = self._accent_normalize(x)
-            if y != x and self._lv_ok(y, context="accent") and self.boun_freq.get(y, 0) >= self.freq_ok:
+        if self.use_accent_norm and self._is_all_lower(x) and self.looks_noisy(x, x):
+            y = self.accent_normalize(x)
+            if y != x and self.lv_ok(y, context="accent") and self.boun_freq.get(y, 0) >= self.freq_ok:
                 return y
             x = y
 
         # F) Base class lexicon/ED<=1 (already has boun_freq & diacritics)
-        y = super()._normalize_token(x)
-        if y != x and self._lv_ok(y, context="lexicon"):
+        y = super().normalize_token(x)
+        if y != x and self.lv_ok(y, context="lexicon"):
             return y
         x = y
 
         # G) Precision-first spelling correction ED<=2 (LV + freq prior)
-        y = self._spell_correct_ed2(x)
-        if y != x and self._lv_ok(y, context="ed2"):
+        y = self.spell_correct_ed2(x)
+        if y != x and self.lv_ok(y, context="ed2"):
             return y
 
         return y
 
     # -------------------- Layers --------------------
-    def _apply_replacements(self, tok: str) -> str:
+    def apply_replacements(self, tok: str) -> str:
         t = tok
         # Symbol-in-letter replacements: $→s, @→a (only between letters)
-        def _sym(m):
+        def sym(m):
             ch = m.group(0)
             return "s" if ch == "$" else "a"
-        t = self.re_around_symbol.sub(_sym, t)
+        t = self.re_around_symbol.sub(sym, t)
 
         # Small slang map (lowercased key match)
         low = tr_lower(t)
@@ -224,7 +246,7 @@ class UniversalAdvancedNormalizer(UniversalSimpleNormalizer):
             t = self.repl_map[low]
         return t
 
-    def _proper_noun_fix(self, tok: str) -> str:
+    def proper_noun_fix(self, tok: str) -> str:
         """Detect probable proper nouns using gazetteers + ratio heuristic, add apostrophe if suffix-like ending exists."""
         if not self.proper_sets:
             return tok
@@ -250,7 +272,7 @@ class UniversalAdvancedNormalizer(UniversalSimpleNormalizer):
                     candidate = stem2 + "’" + tail
         return candidate
 
-    def _diacritize_seq(self, tok: str) -> str:
+    def diacritize_seq(self, tok: str) -> str:
         if self.diacritizer is not None:
             try:
                 out = self.diacritizer.diacritize(tok)
@@ -260,13 +282,13 @@ class UniversalAdvancedNormalizer(UniversalSimpleNormalizer):
         # fallback: try base multi-flip search but gate with LV
         key = tr_lower(tok)
         max_flips = self.max_diacritic_flips_short if len(key) <= self.short_token_len else 1
-        cand_key = self._multi_diacritic_variant_in_lex(key, max_flips=max_flips)
+        cand_key = self.multi_diacritic_variant_in_lex(key, max_flips=max_flips)
         if cand_key is not None:
             cand = self.lexicon[cand_key]
             return cand
         return tok
 
-    def _restore_vowels(self, tok: str) -> str:
+    def restore_vowels(self, tok: str) -> str:
         if self.vowel_restorer is not None:
             try:
                 out = self.vowel_restorer.restore(tok)
@@ -278,30 +300,30 @@ class UniversalAdvancedNormalizer(UniversalSimpleNormalizer):
         t = re.sub(r"(?i)(\b\p{L}{2,}?)([bcçdfgğhjklmnprsştvyz]{3,})(\p{L}*\b)", r"\1e\2\3", tok)
         return t
 
-    def _accent_normalize(self, tok: str) -> str:
+    def accent_normalize(self, tok: str) -> str:
         t = tok
         for pat, repl in self.accent_rules:
             tt = pat.sub(repl, t)
             if tt != t:
                 # if we have generator/analyzer, prefer a valid surface
-                if self._lv_ok(tt, context="accent"):
+                if self.lv_ok(tt, context="accent"):
                     return tt
             t = tt
         # Question particle heuristic (only if no apostrophe present)
         if "’" not in t and self.re_q_particle.match(t):
-            # e.g., gidiyormusun -> gidiyor musun  (very simple split)
+            # gidiyormusun -> gidiyor musun  
             m = self.re_q_particle.match(t)
             if m:
                 root, mi, suf = m.groups()
                 candidate = (root.rstrip() + " " + mi.lower() + ("" if not suf else " " + suf.lower())).strip()
-                if self._lv_ok(candidate, context="accent"):
+                if self.lv_ok(candidate, context="accent"):
                     return candidate
         return t
 
-    def _spell_correct_ed2(self, tok: str) -> str:
+    def spell_correct_ed2(self, tok: str) -> str:
         """Try ED<=2 correction with LV + priors (freq, diacritics).
         VERY conservative: only attempt on noisy tokens and accept only high-freq candidates."""
-        if not self._looks_noisy(tok, tok):
+        if not self.looks_noisy(tok, tok):
             return tok
         key = tr_lower(tok)
         pool = (
@@ -317,17 +339,17 @@ class UniversalAdvancedNormalizer(UniversalSimpleNormalizer):
         for k in pool:
             if k == key:
                 continue
-            if self._ed_leq_two(key, k):
+            if self.ed_leq_two(key, k):
                 cand = self.lexicon[k]
 
                 # require LV OK and frequency strong enough
-                if not self._lv_ok(cand, context="ed2"):
+                if not self.lv_ok(cand, context="ed2"):
                     continue
                 if self.boun_freq.get(cand, 0) < self.freq_ok:
                     continue
 
                 # score: lower ED, higher freq, richer diacritics, shorter
-                ed = self._ed_est(key, k)
+                ed = self.ed_est(key, k)
                 freq = self.boun_freq.get(cand, 0)
                 dia = sum(ch in "çğıöşüÇĞİÖŞÜ" for ch in cand)
                 score = (ed, -freq, -dia, len(cand), k)
@@ -337,7 +359,7 @@ class UniversalAdvancedNormalizer(UniversalSimpleNormalizer):
         return best
 
     # -------------------- Utilities --------------------
-    def _shrink_repetitions_to(self, s: str, n: int) -> str:
+    def shrink_repetitions_to(self, s: str, n: int) -> str:
         """Shrink runs of >=(n+1) to length n."""
         if n <= 1:
             return re.sub(r"(.)\1{1,}", r"\1", s)
@@ -349,7 +371,7 @@ class UniversalAdvancedNormalizer(UniversalSimpleNormalizer):
 
             return s
 
-    def _lv_ok(self, token: str, context: str = "general") -> bool:
+    def lv_ok(self, token: str, context: str = "general") -> bool:
         """Language Validator:
         - lv_mode='off' or analyzer=None => always True
         - lv_mode='soft' => require analysis if available, but allow low-risk contexts
@@ -369,7 +391,7 @@ class UniversalAdvancedNormalizer(UniversalSimpleNormalizer):
             return True  # fail-open for robustness
 
     @staticmethod
-    def _ed_est(a: str, b: str) -> int:
+    def ed_est(a: str, b: str) -> int:
         """Very small-distance edit estimator (0/1/2+)."""
         if a == b:
             return 0
@@ -379,10 +401,10 @@ class UniversalAdvancedNormalizer(UniversalSimpleNormalizer):
             if diff <= 1:
                 return diff
         # fallback: <=2 check
-        return 1 if UniversalAdvancedNormalizer._ed_leq_one(a, b) else (2 if UniversalAdvancedNormalizer._ed_leq_two(a, b) else 3)
+        return 1 if UniversalAdvancedNormalizer.ed_leq_one(a, b) else (2 if UniversalAdvancedNormalizer.ed_leq_two(a, b) else 3)
 
     @staticmethod
-    def _ed_leq_one(a: str, b: str) -> bool:
+    def ed_leq_one(a: str, b: str) -> bool:
         # re-use base logic if available
         la, lb = len(a), len(b)
         if abs(la - lb) > 1:
@@ -404,7 +426,7 @@ class UniversalAdvancedNormalizer(UniversalSimpleNormalizer):
         return True
 
     @staticmethod
-    def _ed_leq_two(a: str, b: str) -> bool:
+    def ed_leq_two(a: str, b: str) -> bool:
         """True iff Levenshtein(a,b) <= 2. Banded DP (Ukkonen) with k=2."""
         la, lb = len(a), len(b)
         k = 2

@@ -11,13 +11,28 @@ UnifiedBounItuTreebankLoader example:
         TOKENS     : ['1936', 'yılında', 'yız', '.']
 """
 
+# Set the path as src, so we can use relative paths
+from pathlib import Path
+import sys
 
-from typing import List, Dict, Iterable, Optional, Tuple
+current = Path(__file__).resolve()
+for parent in current.parents:
+    if (parent / "src").is_dir():
+        project_root = parent
+        break
+else:
+    project_root = current.parent  
+
+# Add the project root path into sys
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+from typing import List, Dict, Iterable, Optional, Tuple, Set
 from dataclasses import dataclass
 from itertools import islice
 import regex as re
-import csv
 
+from src.tokenizer.utils import build_text_and_boundaries_from_example, merge_boun_mwes
 
 # ----------------------------
 # Utils
@@ -28,7 +43,7 @@ _PUNCT_NO_SPACE_BEFORE = set(".,;:!?%)”’›»…")
 _PUNCT_NO_SPACE_AFTER  = set("(%“‘‹«")
 
 def detok(tokens: List[str]) -> str:
-    """Reconstruct a human-readable sentence from UD-style tokens."""
+    """Reconstruct a sentence from UD-style tokens. We need the reconstruct sentences so we can use their detokenized versions when training a NB tokenizer"""
     if not tokens:
         return ""
     out: List[str] = [tokens[0]]
@@ -43,10 +58,10 @@ def detok(tokens: List[str]) -> str:
     return "".join(out)
 
 def join_simple(tokens: List[str]) -> str:
-    """Simple join for ITU Web where apostrophe forms are already single tokens."""
+    """Join for IWT where apostrophe forms are already single tokens."""
     return " ".join(tokens)
 
-# Consistent masking so URL/email/number differences don't dominate evaluation.
+# Mask special tokens to not falsely normalize
 RE_URL   = re.compile(r"(?i)\bhttps?://\S+")
 RE_EMAIL = re.compile(r"(?i)\b[\w.\-+%]+@[\w.\-]+\.[A-Za-z]{2,}\b")
 RE_NUM   = re.compile(r"(?<!\p{L})\d+(?:[.,]\d+)?(?!\p{L})")
@@ -56,7 +71,6 @@ def mask_specials(s: str) -> str:
     s = RE_EMAIL.sub("<EMAIL>", s)
     s = RE_NUM.sub("<NUM>", s)
     return s
-
 
 # ----------------------------
 # Data container
@@ -77,10 +91,16 @@ class UnifiedBounItuTreebankLoader:
     """
     Add sources with add_boun(...) or add_iwt(...).
     Iterate over all examples with iterate().
+
+    If boun_mwe_aware=True, BOUN gold tokens will merge certain
+    UD-style MWE groups (flat/fixed/mwe/compound) into a single
+    gold token (e.g. "Türk Hava Yolları"). Because we need to 
+    learn to tokenize MWEs as well. 
     """
-    def __init__(self, boun_detok: bool = True):
+    def __init__(self, boun_detok: bool = True, boun_mwe_aware: bool = True):
         self.sources: List[Tuple[str, str]] = []
         self.boun_detok = boun_detok
+        self.boun_mwe_aware = boun_mwe_aware
 
     def add_boun(self, conllu_path: str) -> None:
         """Register a BOUN UD-CoNLL-U file."""
@@ -90,10 +110,6 @@ class UnifiedBounItuTreebankLoader:
         """Register an ITU Web file in '...withSentenceBegin' format."""
         self.sources.append(("iwt", with_sentence_begin_path))
 
-    def add_tweets_cqp(self, cqp_export_path: str) -> None:
-        """Register a TweetS CQPweb export (tab-separated .txt/.tsv with headers)."""
-        self.sources.append(("tweets", cqp_export_path))
-
     def iterate(self) -> Iterable[Example]:
         """Yield unified Example items from all registered sources."""
         for stype, path in self.sources:
@@ -101,38 +117,45 @@ class UnifiedBounItuTreebankLoader:
                 yield from self.read_boun_conllu(path)
             elif stype == "iwt":
                 yield from self.read_iwt_with_sentence_begin(path)
-            elif stype == "tweets":
-                yield from self.read_tweets_cqp_export(path)
             else:
                 raise ValueError(f"Unknown source type: {stype}")
 
     # --------- BOUN (UD CoNLL-U) ----------
     def read_boun_conllu(self, path: str) -> Iterable[Example]:
         """
-        CoNLL-U reader (no external parser).
+        CoNLL-U reader
         - Skips multi-word token ranges (e.g., '3-4') and empty nodes ('2.1').
         - Reconstructs sentence text from tokens if # text is missing.
+        - If self.boun_mwe_aware is True, merges some MWE groups
+          (flat/fixed/mwe/compound) into single gold tokens.
         """
         sent_meta: Dict[str, str] = {}
-        gold_tokens: List[str] = []
+        sent_tokens: List[dict] = []  
 
         with open(path, "r", encoding="utf-8") as f:
             for raw_line in f:
                 line = raw_line.rstrip("\n")
                 if not line:
                     # end of sentence
-                    if gold_tokens:
+                    if sent_tokens:
+                        # Decide gold_tokens (MWE-aware or plain)
+                        if self.boun_mwe_aware:
+                            gold_tokens = merge_boun_mwes(sent_tokens)
+                        else:
+                            gold_tokens = [t["form"] for t in sent_tokens]
+
                         txt = sent_meta.get("text")
                         if not txt:
                             txt = detok(gold_tokens) if self.boun_detok else " ".join(gold_tokens)
+
                         yield Example(
                             raw_text=txt,
-                            gold_text=txt,          # BOUN has no separate gold normalization
-                            gold_tokens=gold_tokens[:],
+                            gold_text=txt,
+                            gold_tokens=gold_tokens, # [:]
                             domain="boun",
                             sent_id=sent_meta.get("sent_id"),
                         )
-                        gold_tokens.clear()
+                        sent_tokens.clear()
                         sent_meta.clear()
                     continue
 
@@ -144,17 +167,38 @@ class UnifiedBounItuTreebankLoader:
                     continue
 
                 parts = line.split("\t")
-                if len(parts) < 2:
+                if len(parts) < 8:
                     continue
                 tok_id = parts[0]
                 if "-" in tok_id or "." in tok_id:
                     # skip multi-word ranges and empty nodes
                     continue
+
+                tid = int(tok_id)
                 form = parts[1]
-                gold_tokens.append(form)
+                head = parts[6]
+                deprel = parts[7]
+
+                # some HEADs are "0" (root)
+                try:
+                    head_int = int(head)
+                except ValueError:
+                    head_int = 0
+
+                sent_tokens.append({
+                    "id": tid,
+                    "form": form,
+                    "head": head_int,
+                    "deprel": deprel,
+                })
 
             # EOF flush
-            if gold_tokens:
+            if sent_tokens:
+                if self.boun_mwe_aware:
+                    gold_tokens = merge_boun_mwes(sent_tokens)
+                else:
+                    gold_tokens = [t["form"] for t in sent_tokens]
+
                 txt = sent_meta.get("text")
                 if not txt:
                     txt = detok(gold_tokens) if self.boun_detok else " ".join(gold_tokens)
@@ -207,7 +251,7 @@ class UnifiedBounItuTreebankLoader:
                         yield Example(
                             raw_text=join_simple(raw_sent),
                             gold_text=join_simple(gold_sent),
-                            gold_tokens=gold_sent[:],
+                            gold_tokens=gold_sent, #[:],
                             domain="iwt",
                             sent_id=None,
                         )
@@ -231,135 +275,31 @@ class UnifiedBounItuTreebankLoader:
                     sent_id=None,
                 )
 
-    # --------- TweetS (CQPweb export .txt/.tsv) ----------
-    def read_tweets_cqp_export(self, path: str) -> Iterable[Example]:
+    def iterate_for_tokenization(self, domains: Optional[List[str]] = None, max_sentences: Optional[int] = None) -> Iterable[Tuple[str, Set[int], Example]]:
         """
-        Expects a CQPweb 'Save/Download' export with headers (tab-separated).
-        Uses columns:
-          - Context before, Query item, Context after
-          - Correct (optional)
-          - Text ID (optional)
-          - Tagged query item (optional; sadece kontrol için)
-        If 'Correct' is empty/missing, gold_text == raw_text.
+        Iterate over examples in a form that is directly usable for
+        tokenization training on real sentences (detokenized).
+
+        For each sentence, it returns:
+            - text: the sentence string (raw_text or gold_text, depending on domain)
+            - boundaries: set of gold token boundary positions on that text
+            - example: the original Example object
         """
-        # CQP export bazen "Number of hit" gibi boşluklu başlıklar içerir.
-        # Hepsini lowercase'a çevirip boşlukları '_' yapalım.
-        def norm_col(c: str) -> str:
-            return c.strip().lower().replace(" ", "_")
+        count = 0
+        for ex in self.iterate():
+            if domains is not None and ex.domain not in domains:
+                continue
+            if not ex.gold_tokens:
+                continue
 
-        with open(path, "r", encoding="utf-8", newline="") as f:
-            # dialect belirgin olsun
-            reader = csv.DictReader(f, delimiter="\t")
-            reader.fieldnames = [norm_col(c) for c in (reader.fieldnames or [])]
+            text, boundaries = build_text_and_boundaries_from_example(ex)
+            if not boundaries:
+                # alignment failed, skip this sentence
+                continue
 
-            # gerekli kolon adları
-            # (bazı temalarda 'matchbegin_corpus_position' gibi ekstra alanlar da olabilir, görmezden geliyoruz)
-            for row in reader:
-                row = {norm_col(k): (v or "") for k, v in row.items()}
+            yield text, boundaries, ex
 
-                ctx_bef = row.get("context_before", "")
-                query   = row.get("query_item", "")
-                ctx_aft = row.get("context_after", "")
-                correct = row.get("correct", "")  # yoksa "" döner
-                text_id = row.get("text_id", None)
+            count += 1
+            if max_sentences is not None and count >= max_sentences:
+                break
 
-                if not query:
-                    # Güvenlik: bozuk satır
-                    continue
-
-                # ham metni birleştir
-                raw_text = " ".join([s for s in (ctx_bef.strip(), query.strip(), ctx_aft.strip()) if s])
-
-                # gold: Correct doluysa Query yerine Correct koy
-                if correct and correct.strip() and (correct.strip() != query.strip()):
-                    gold_text = " ".join([s for s in (ctx_bef.strip(), correct.strip(), ctx_aft.strip()) if s])
-                else:
-                    gold_text = raw_text
-
-                # tokenlar: en basit yaklaşım; isterseniz tweet tokenizer ile değiştirebilirsiniz
-                gold_tokens = gold_text.split()
-
-                yield Example(
-                    raw_text=raw_text,
-                    gold_text=gold_text,
-                    gold_tokens=gold_tokens,
-                    domain="tweets",
-                    sent_id=text_id,
-                )
-
-# ----------------------------
-# Minimal evaluator (optional)
-# ----------------------------
-def evaluate_normalizer(normalize_fn, examples: Iterable[Example], mask: bool = True) -> Dict[str, float]:
-    """
-    Simple evaluation:
-      - sentence exact match (string level)
-      - token accuracy (by whitespace split; good enough for ITU where apostrophes are single tokens)
-    """
-    total_sent = 0
-    exact_sent = 0
-    total_tok = 0
-    correct_tok = 0
-
-    for ex in examples:
-        pred = normalize_fn(ex.raw_text)
-        gold = ex.gold_text
-        if mask:
-            pred = mask_specials(pred)
-            gold = mask_specials(gold)
-
-        if pred == gold:
-            exact_sent += 1
-        total_sent += 1
-
-        pred_toks = pred.split()
-        gold_toks = gold.split()
-        m = min(len(pred_toks), len(gold_toks))
-        correct_tok += sum(1 for i in range(m) if pred_toks[i] == gold_toks[i])
-        total_tok += len(gold_toks)
-
-    return {
-        "sent_exact": (exact_sent / total_sent) if total_sent else 0.0,
-        "token_acc": (correct_tok / total_tok) if total_tok else 0.0,
-    }
-
-def show_examples(ex_iter, n=3, title=""):
-    print(f"\n*** {title} (first {n}) ***\n")
-    for ex in islice(ex_iter, n):
-        print("Domain     :", ex.domain)
-        print("SentenceID :", ex.sent_id)
-        print("RAW        :", ex.raw_text)
-        print("GOLD       :", ex.gold_text)
-        print("TOKENS     :", repr(ex.gold_tokens))  # repr -> satırların birleşmesini engeller
-        print("-" * 60)
-
-def main():
-    ul = UnifiedBounItuTreebankLoader(boun_detok=True)
-
-    # BOUN (UD CoNLL-U)
-    ul.add_boun("../datasets/UD_Turkish-BOUN_v2.11_unrestricted-main/train-unr.conllu")
-
-    # ITU Web (RAW→GOLD withSentenceBegin)
-    ul.add_iwt("../datasets/IWTandTestSmall/IWT_normalizationerrorsNoUpperCase.withSentenceBegin")
-
-    # TweetS (CQP export; tab-separated .txt/.tsv)
-    ul.add_tweets_cqp("../datasets/tweetS.txt")   # senin indirdiğin dosya
-
-    # Birkaç örnek görelim
-    boun = []
-    iwt  = []
-    tw   = []
-
-    for ex in ul.iterate():
-        if ex.domain == "boun" and len(boun) < 2: boun.append(ex)
-        if ex.domain == "iwt"  and len(iwt)  < 2: iwt.append(ex)
-        if ex.domain == "tweets" and len(tw) < 2: tw.append(ex)
-        if len(boun) >= 2 and len(iwt) >= 2 and len(tw) >= 2:
-            break
-
-    show_examples(iter(boun), 2, title="BOUN examples")
-    show_examples(iter(iwt),  2, title="ITU examples")
-    show_examples(iter(tw),   2, title="TweetS examples")  # raw vs gold farkını gör
-
-if __name__ == "__main__":
-    main()

@@ -1,5 +1,5 @@
-from collections import Counter, defaultdict
 from typing import List, Tuple, Dict, Optional
+from collections import Counter, defaultdict
 import unicodedata
 import regex as re
 import json
@@ -122,7 +122,7 @@ class SimpleLexiconBuilder:
         Punctuation at token edges is stripped for vocab purposes.
         """
         # small helpers kept local for clarity
-        punct_strip = re.compile(r"^\p{P}+|\p{P}+$")  # strip leading/trailing punctuation
+        punct_strip = re.compile(r"^\p{P}+|\p{P}+$")  # strip leading punctuation
 
         def emit_from_surface_text(txt: str):
             # split by whitespace, strip edge punctuation, clean, filter
@@ -252,16 +252,16 @@ class SimpleLexiconBuilder:
 
         If expand_with_boun_identities=True:
         - For any key not seen in ITU Web, backfill from BOUN:
-                key = tr_lower(boun_form) -> target = canonical BOUN casing
+            key = tr_lower(boun_form) -> target = canonical BOUN casing
         - Canonical casing chosen by max BOUN frequency per lowercase bucket.
         """
-        # 1) ITU: group key -> {tgt: freq}
+        # ITU: group key -> {tgt: freq}
         grouped: Dict[str, Dict[str, int]] = defaultdict(dict)
         for (key, tgt), freq in self.pair_counter.items():
             if freq >= min_freq:
                 grouped[key][tgt] = grouped[key].get(tgt, 0) + freq
 
-        # 2) ITU: resolve best target per key (with optional BOUN bonus)
+        # ITU: resolve best target per key (with optional BOUN bonus)
         lex: Dict[str, str] = {}
         for key, tgts in grouped.items():
             best_tgt: Optional[str] = None
@@ -313,33 +313,30 @@ class SimpleLexiconBuilder:
 if __name__ == "__main__":
     builder = SimpleLexiconBuilder(max_len=40)
 
-    # 1) ITU Web -> raw→gold pairs
-    builder.add_iwt_file("../IWTandTestSmall/IWT_normalizationerrorsNoUpperCase.withSentenceBegin")
+    # 1) ITU Web -> raw to gold pairs
+    builder.add_iwt_file("data/IWTandTestSmall/IWT_normalizationerrorsNoUpperCase.withSentenceBegin")
 
     # 2) BOUN UD -> vocabulary (to prefer cleaner targets)
-    builder.add_boun_conllu("../UD_Turkish-BOUN_v2.11_unrestricted-main/train-unr.conllu")
-    # (opsiyonel) daha fazlasını da ekleyebilirsin:
-    # builder.add_boun_conllu("../UD_Turkish-BOUN-master/tr_boun-ud-dev.conllu")
-    # builder.add_boun_conllu("../UD_Turkish-BOUN-master/tr_boun-ud-test.conllu")
+    builder.add_boun_conllu("data/UD_Turkish-BOUN_v2.11_unrestricted-main/train-unr.conllu")
 
     safe_vocab = set(builder.boun_vocab) # DO-NOT-TOUCH list
     boun_freq  = dict(builder.boun_freq)
 
-    with open("normalizer/resources/boun_safe_vocab.txt", "w", encoding="utf-8") as f:
+    with open("normalization_resources/boun_safe_vocab.txt", "w", encoding="utf-8") as f:
         for tok in safe_vocab:
             f.write(tok + "\n")
 
     payload = {tok: int(freq) for tok, freq in boun_freq.items()}
-    with open("normalizer/resources/boun_freq.json", "w", encoding="utf-8") as f:
+    with open("normalization_resources/boun_freq.json", "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2, sort_keys=True)
 
-    # 3) Build lexicon
-    #    - min_freq: IWT’de en az kaç kez görülmüş çift kabul edilsin
-    #    - boun_bonus: BOUN’da geçen hedefe puan bonusu (küçük bir sayı yeterli)
-    #    - prefer_boun: True ise BOUN’da görülen hedefleri öncelikle seç
+    # Build lexicon
+    #    - min_freq: how many times should the word appear for acception
+    #    - boun_bonus: if the word appears in Boun (clean treebank), give a bonus point
+    #    - prefer_boun: if True, prefer the Boun ones
+    
     #lex = builder.build(min_freq=1, boun_bonus=1, prefer_boun=True)
     lex = builder.build(min_freq=1, boun_bonus=1, prefer_boun=True, expand_with_boun_identities=False, min_boun_freq=2)
 
-    # 4) Save
-    builder.save_tsv(lex, "normalizer/resources/lexicon.tsv")
+    builder.save_tsv(lex, "normalization_resources/lexicon.tsv")
     print("Saved", len(lex), "entries to lexicon.tsv")

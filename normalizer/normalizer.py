@@ -157,7 +157,7 @@ class UniversalSimpleNormalizer:
     def normalize(self, text: str) -> str:
         """Main normalization pipeline."""
         # 1) Unicode normalization & sanitize
-        s = self._normalize_unicode(text)
+        s = self.normalize_unicode(text)
 
         # 2) Reversible masking (Level 2)
         if self.use_masking:
@@ -168,9 +168,9 @@ class UniversalSimpleNormalizer:
 
         # 3) Token-level normalization
         raw_tokens = s.split()
-        out_tokens: List[str] = [self._normalize_token(raw_tokens[0])] if raw_tokens else []
+        out_tokens: List[str] = [self.normalize_token(raw_tokens[0])] if raw_tokens else []
         for i in range(1, len(raw_tokens)):
-            out_tokens.append(self._normalize_token(raw_tokens[i]))
+            out_tokens.append(self.normalize_token(raw_tokens[i]))
 
         # 4) Simple sentence casing: capitalize first token; optionally downcase others
         if out_tokens:
@@ -196,7 +196,7 @@ class UniversalSimpleNormalizer:
         return s
 
     # ---------- Token pipeline with confidence ----------
-    def _normalize_token(self, tok: str) -> str:
+    def normalize_token(self, tok: str) -> str:
         """Normalize a single token using lexicon/diacritics/ED<=1, with priors."""
         if not tok or self.re_all_punct.fullmatch(tok):
             return tok
@@ -223,7 +223,7 @@ class UniversalSimpleNormalizer:
             
             # 2 - Diacritics: allow up to 2 flips for short tokens, 1 for others
             max_flips = self.max_diacritic_flips_short if len(key) <= self.short_token_len else 1
-            cand_key = self._multi_diacritic_variant_in_lex(key, max_flips=max_flips)
+            cand_key = self.multi_diacritic_variant_in_lex(key, max_flips=max_flips)
             if cand_key is not None:
                 return self.lexicon[cand_key]
 
@@ -245,11 +245,11 @@ class UniversalSimpleNormalizer:
             return True
         if self.boun_freq.get(cand, 0) >= self.freq_ok:
             return True
-        if self.allow_on_noisy and from_lexicon and self._looks_noisy(raw_tok, cand):
+        if self.allow_on_noisy and from_lexicon and self.looks_noisy(raw_tok, cand):
             return True
         return False
 
-    def _looks_noisy(self, raw_tok: str, cand: str) -> bool:
+    def looks_noisy(self, raw_tok: str, cand: str) -> bool:
         """Heuristics for noisy tokens: elongations, simple diacritic mismatches, etc."""
         if re.search(r"(.)\1{2,}", raw_tok, flags=re.IGNORECASE):
             return True
@@ -264,7 +264,7 @@ class UniversalSimpleNormalizer:
         return False
 
     # ---------- Helpers ----------
-    def _multi_diacritic_variant_in_lex(self, key: str, max_flips: int) -> Optional[str]:
+    def multi_diacritic_variant_in_lex(self, key: str, max_flips: int) -> Optional[str]:
         """Try flipping up to `max_flips` diacritic positions; return first lexicon hit."""
         from itertools import combinations, product
 
@@ -323,7 +323,7 @@ class UniversalSimpleNormalizer:
         cands = []
         for k in pool:
             # quick length guard already applied
-            if self._ed_leq_one(key, k):
+            if self.ed_leq_one(key, k):
                 cands.append(k)
 
         if not cands:
@@ -339,7 +339,7 @@ class UniversalSimpleNormalizer:
 
         return min(cands, key=score)
 
-    def _ed_leq_one(self, a: str, b: str) -> bool:
+    def ed_leq_one(self, a: str, b: str) -> bool:
         """True iff Levenshtein(a,b) <= 1 (optimized for small distances)."""
         if a == b:
             return True
@@ -405,7 +405,7 @@ class UniversalSimpleNormalizer:
 
         return s
 
-    def _normalize_unicode(self, s: str) -> str:
+    def normalize_unicode(self, s: str) -> str:
         """NFKC -> sanitize smart punctuation/zero-width -> NFC for stable Unicode."""
         s = unicodedata.normalize("NFKC", s)
         s = self._pre_sanitize(s)
@@ -446,7 +446,7 @@ class UniversalSimpleNormalizer:
                     continue
                 src, tgt = line.split("\t", 1)
                 # make lexicon bytes compatible with normalize() pipeline
-                src = self._normalize_unicode(src.strip())
-                tgt = self._normalize_unicode(tgt.strip())
+                src = self.normalize_unicode(src.strip())
+                tgt = self.normalize_unicode(tgt.strip())
                 mapping[tr_lower(src)] = tgt
         return mapping
