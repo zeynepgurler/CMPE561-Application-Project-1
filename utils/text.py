@@ -7,9 +7,3 @@ HASHTAG_RE = re.compile(r"#[\p{L}0-9_]+", re.UNICODE)
 MENTION_RE = re.compile(r"@[\p{L}0-9_]+", re.UNICODE)
 WHITESPACE_RE = re.compile(r"\s+")
 
-
-ABBREV_SET = {"dr.", "sn.", "örn.", "alb.", "prof.", "bkz."}
-
-
-def is_abbrev(token: str) -> bool:
-    return token.lower() in ABBREV_SET

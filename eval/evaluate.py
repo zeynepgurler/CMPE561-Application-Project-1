@@ -32,3 +32,23 @@ def eval_sentence_splitting(pred_sents: List[List[str]], gold_sents: List[List[s
     fp = len(set(pred_b) - set(gold_b))
     fn = len(set(gold_b) - set(pred_b))
     return precision_recall_f1(tp, fp, fn)
+
+
+def eval_sentence_splitting_raw(pred_sents: List[str], gold_sents: List[str]):
+    def sentence_bounds(sent_list):
+        bounds = []
+        idx = 0
+        for sent in sent_list:
+            idx += len(sent)
+            bounds.append(idx)
+            idx += 1  # assume one space between sentences when joining
+        return bounds
+
+    pred_b = sentence_bounds(pred_sents)
+    gold_b = sentence_bounds(gold_sents)
+
+    tp = len(set(pred_b) & set(gold_b))
+    fp = len(set(pred_b) - set(gold_b))
+    fn = len(set(gold_b) - set(pred_b))
+
+    return precision_recall_f1(tp, fp, fn)
