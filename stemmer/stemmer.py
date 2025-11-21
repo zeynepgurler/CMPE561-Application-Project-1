@@ -1,7 +1,5 @@
 from typing import List
 from utils.io import read_tsv
-import re
-#    stemmed_sents = [[self.stemmer.stem(tok) for tok in sent] for sent in sents]
 
 
 class SimpleTurkishStemmer:
@@ -45,19 +43,7 @@ class SimpleTurkishStemmer:
 stemmer = SimpleTurkishStemmer("suffixes.tsv")
 gold = read_tsv("gold_stemmer.tsv")
 
-true = 0
-false = 0
-for pair in gold[1:]:
-    stemmed = stemmer.stem(pair[0])
-    if stemmed == pair[1]:
-        true += 1
-    else:
-        #print(f"Form: {pair[0]}\tLemma: {pair[1]}\tStem: {stemmed}")
-        false += 1
-print(false)
 
-acc = (true / (true + false))
-print(acc)
 
 x = ['suya', "gidiyor", "diyor", "ediyor", "yiyor", "kitaba", "sebebe", "kazan", "kazana", "ye", "sev", "kadın", "pazar",
      "kapak", "köy", "sepet", "trafik", "trafiğe", "kitab", "sebeb", "ağ", "eleğ", "tac", "seped", "kepeng", "kapağa", "kitabımı",
@@ -71,10 +57,6 @@ cap = ["ankara'nın", "istanbul'un", "trabzon'a", "konya'yı", "Fransızların"]
 #print(x)
 #print(stm)
 
-
 # add final devoicing and irregular stems, this would ensure +80% acc
 # b-p, c-ç, d-t, g,ğ-k
 #neden, diyor --> stem di, yiyor --> stem yi ,önce, bana, sana, istiyorum, burnu, karnı, şehrin, şehri, doğ,
-
-
-
